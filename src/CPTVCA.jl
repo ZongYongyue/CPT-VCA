@@ -1,4 +1,4 @@
-module ClusterPerturbationT
+module CPTVCA
 
 using Arpack: eigs
 using LinearAlgebra: Eigen
@@ -23,13 +23,4 @@ function ClusterH(cluster::AbstractLattice, hilbert::Hilbert, terms::Tuple{Varar
     return ClusterH(cluster, clH, clHₘ)
 end
 
-
-
-
-
-
-
-
-
-
-end #module
+end # module CPTVCA

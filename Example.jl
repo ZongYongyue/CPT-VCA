@@ -4,6 +4,10 @@ using SparseArrays: SparseMatrixCSC, spzeros
 using QuantumLattices
 using ExactDiagonalization
 
+using Pkg;
+Pkg.add("/Users/tzung/Library/Mobile Documents/com~apple~CloudDocs/mygit/CPTVCA")
+using CPTVCA
+#= 
 """
 get  the matrix representation Hamiltonian of a single cluster systerm
 """
@@ -18,7 +22,7 @@ function ClusterH(cluster::AbstractLattice, hilbert::Hilbert, terms::Tuple{Varar
     clHₘ = expand(ed.Hₘ)
     return ClusterH(cluster, clH, clHₘ)
 end
-
+=#
 lattice = Lattice([0.0, 0.0], [1, 0])
 bond = bonds(lattice, Neighbors(1=>1.0))
 hilbert = Hilbert(site=>Fock{:f}(1, 2) for site=1:length(lattice))

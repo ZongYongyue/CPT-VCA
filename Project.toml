@@ -1,0 +1,18 @@
+name = "CPTVCA"
+uuid = "3134393c-df72-4d87-947a-3458a1c20f6f"
+authors = ["ZongYongyue <zongyyphy@qq.com>"]
+version = "0.1.0"
+
+[deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+QuantumLattices = "78ae1a1f-1d5d-5174-b61c-66e31b2346dc"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+ExactDiagonalization = "52dcaa32-6da7-11e9-20ef-755843cf72eb"
+
+[compat]
+Arpack = "0.5"
+QuantumLattices = "0.9.4"
+julia = "1.8"
+ExactDiagonalization = "0.1.4"
