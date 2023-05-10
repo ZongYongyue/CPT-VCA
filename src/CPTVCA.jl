@@ -1,12 +1,12 @@
 module CPTVCA
 
 using Arpack: eigs
-using LinearAlgebra: Eigen
+using LinearAlgebra: Eigen, dot
 using SparseArrays: SparseMatrixCSC, spzeros
 using QuantumLattices
 using ExactDiagonalization
 using BlockArrays
-export ClusterH, Cluster, Clusters
+export Cluster, Clusters, interhopping, ClusterH
 """
 define the cluster of a quantum lattice systerm
 """
@@ -50,12 +50,24 @@ function Clusters(cluster::Cluster, steps::Tuple{Int, Vararg{Int}}, vectors::Abs
 end
 
 """
-get the inter-cluster bonds of the given cluster and its surrounding clusters
+get the inter-cluster hopping between the given cluster and its surrounding clusters with specific momentum k
 """
-function interbonds(clusters::Vector{Cluster}, cluster::Cluster, neighbors::Neighbors)
+function interhopping(clusters::Vector{Cluster}, cluster::Cluster, hilbert::Hilbert, neighbors::Neighbors, k::Vector)
     surroundings = filter(x->x!=cluster,clusters)
-    for (index,value) in enumerate(surroundings)
-        inter
+    spin = Rational((hilbert[1].nspin-1)/2)
+    norbital = hilbert[1].norbital
+    ops = 0
+    for (index,value) in enumerate(surroundings), s in -spin:spin, n in 1:norbital
+        seqs = interlinks(value, cluster, neighbors)
+        if !isempty(seqs)
+            for q in 1:length(seqs)
+                op = exp(im*dot(k, value[:,1]))*CompositeIndex(Index(seqs[q][2],FID{:f}(n, s, 2)), cluster[:,seqs[q][2]], [0.0, 0.0])*CompositeIndex(Index(seqs[q][3],FID{:f}(n, s, 1)), cluster[:,seqs[q][3]], [0.0, 0.0])
+                ops += op + op'
+            end
+        end
+    end
+    return ops
+end
 
 
 
@@ -73,6 +85,6 @@ function ClusterH(cluster::AbstractLattice, hilbert::Hilbert, terms::Tuple{Varar
     clH = expand(ed.H)
     clHₘ = expand(ed.Hₘ)
     return ClusterH(cluster, clH, clHₘ)
-end
+end 
 
 end # module CPTVCA
