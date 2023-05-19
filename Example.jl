@@ -1,42 +1,34 @@
-using Arpack: eigs
-using LinearAlgebra: Eigen, dot
-using SparseArrays: SparseMatrixCSC, spzeros
+using Revise
 using QuantumLattices
 using ExactDiagonalization
-using BlockArrays
-using Revise
 using CPTVCA
+using Plots
 
 lattice = Lattice([0, 0], [1, 0], [0,1], [1,1])
 
-cluster = Cluster(lattice)
-
-vectors = [[2,0],[0,2]]
-
-clusters = Clusters(cluster,(1,1),vectors)
-
-
 hilbert = Hilbert(site=>Fock{:f}(1, 2) for site=1:length(lattice))
-braket = (BinaryBases(8,4),BinaryBases(8,4))
-table = Table(hilbert)
 
-ops = interhopping(clusters,cluster, hilbert, Neighbors(1=>1.0),[pi/2,pi/2])
+bases = BinaryBases(8, 4)
 
-#= ops_dict = Dict{Tuple{Int,Int}, Vector{Operator}}()
-hopping = Dict{Tuple{Int,Int}, Vector{Operator}}()
-for op in ops
-    key = getsites(op)
-    if !haskey(ops_dict, key)
-        ops_dict[key] = []
+terms = (Hopping(:t, -1.0, 1), Hubbard(:U, 8.0))
+
+vectors = [[1.0, 0.0], [0.0, 1.0]]
+
+neighbors = Neighbors(1=>1.0)
+
+kx_range = range(-π, π, length = 100)
+
+ω_range = range(-1, 1, length = 100)
+
+A_values = zeros(length(kx_range), length(ω_range))
+
+for (i, k) in enumerate(kx_range)
+    for (j, ω) in enumerate(ω_range)
+        A_values[i, j] = (-1 / π) * imag(CPTGF(lattice, hilbert, terms, bases, neighbors, [k ,0], ω, vectors))
     end
-    push!(ops_dict[key], op)
 end
-for i = 1:length(lattice), j = 1:length(lattice)
-    key = (i, j)
-    hopping[key] = []
-end
-for key in keys(ops_dict)
-    if haskey(hopping, key)
-        hopping[key] = ops_dict[key]
-    end
-end =#
+
+#heatmap(kx_range, ω_range, A_values, xlabel="kₓ", ylabel="ω", color=:plasma, title="Spectral Function")
+
+A_values
+
