@@ -4,6 +4,7 @@ using ExactDiagonalization
 using CPTVCA
 using Plots
 gr()
+
 #launch multi-threads
 Threads.nthreads() = 24
 #define a 2d Lattice systerm as a cluster
