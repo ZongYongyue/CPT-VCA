@@ -12,9 +12,9 @@ lattice = Lattice([0, 0], [1, 0], [0, 1], [1, 1])
 #give a bases
 bases = BinaryBases(8, 4)
 #define the terms of Hamiltonian
-t= Hopping(:t, -1.0, 1)
+t= (Hopping(:t, -1.0, 1),)
 U = Hubbard(:U, 4.0)
-terms = (t, U)
+terms = (t[1], U)
 neighbors = Neighbors(1=>1.0)
 hilbert = Hilbert(site=>Fock{:f}(1, 2) for site=1:length(lattice))
 #give the vectors to tile the space with the cluster 
@@ -22,7 +22,7 @@ supervectors = [[2, 0], [0, 2]]
 #give the vectors of the unitcell
 unitvectors = [[1, 0], [0, 1]]
 #caculate the constant information needed in caculating the CPT green function 
-info = CPTinfo(lattice, bases, terms, hilbert, neighbors, supervectors, unitvectors, (200, 200))
+info = CPTinfo(lattice, bases, terms, t, U, hilbert, neighbors, supervectors, unitvectors, (200, 200))
 #give a path in the reciprocal space
 k_path = @rectangle_str("Γ-X-M-Γ") 
 #give the energy range
