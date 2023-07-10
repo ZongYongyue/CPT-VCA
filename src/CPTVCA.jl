@@ -1,123 +1,85 @@
 module CPTVCA
-using Base.Threads
-using Arpack: eigs
-using LinearAlgebra: Eigen, dot, I, SymTridiagonal, Hermitian
-using SparseArrays: SparseMatrixCSC, spzeros, spdiagm
-using QuantumLattices
-using QuantumLattices: expand
+
+using Arpack
 using ExactDiagonalization
-using ExactDiagonalization: eigen
-using BlockArrays
-using IterativeSolvers: minres, gmres
-using StaticArrays: SVector
+using ExactDiagonalization: matrix
 using KrylovKit
-export Cluster, Clusters, CPTinfo, gen_krylov, interclusterbonds, interhoppingm, CGF, CPTGF, CPTspec
+using LinearAlgebra
+using QuantumLattices
+
+export GreenFunction, InitialState, FInitialState, SInitialState, Kryvals, LehmannGreenFunction, Sysvals, VCA
+export initialstate, clusterGreenFunction, differQuadraticTerms, periodization, VCAGreenFunction, singleparticlespectrum
 
 """
-define the cluster of a quantum lattice systerm
+    abstract type GreenFunction
 """
-struct Cluster{T<:Number} <: AbstractMatrix{T}
-    intrasites::Matrix{T}
-    id::Int
-end
-Base.size(c::Cluster)=size(c.intrasites)
-Base.length(c::Cluster)=size(c.intrasites,2)
-Base.getindex(c::Cluster, i, j) = c.intrasites[i, j]
-Base.setindex!(c::Cluster, v, i, j) = (c.intrasites[i, j] = v)
-function Cluster(lattice::AbstractLattice, id::Int=0)
-    intrasites = lattice.coordinates
-    return Cluster(intrasites, id)
-end
+abstract type GreenFunction end
 
 """
-obtaion a supercluster consisting of a given cluster and its surrounding clusters 
+    abstract type InitialState
+
+The Operators needed in calculating the initial vector in Lanczos iteration method of krylov subspace
 """
-function Clusters(cluster::Cluster, steps::Tuple{Int, Vararg{Int}}, vectors::AbstractVector{<:AbstractVector{<:Number}})
-    @assert length(steps) == length(vectors) "steps and vectors must have the same length"
-    translations = Array{Array{Int64, 1}, 1}()
-    if length(steps) == 2
-        for i in -steps[1]:steps[1], j in -steps[2]:steps[2]
-            push!(translations, [i, j])
-        end
-    elseif length(steps) == 3
-        for i in -steps[1]:steps[1], j in -steps[2]:steps[2], k in -steps[3]:steps[3]
-            push!(translations, [i, j, k])
-        end
-    else
-        error("Dimension is limited to 2 or 3.")
+abstract type InitialState end
+
+"""
+    FInitialState{O<:Operator} <: InitialState
+    SInitialState{O<:Operator} <: InitialState
+
+The Operators in a fermion/spin system needed in calculating the initial vector in Lanczos iteration method of krylov subspace 
+"""
+struct FInitialState{O<:Operator} <: InitialState
+    sign::Int
+    ops::OperatorSum{O}
+    function FInitialState(sign::Int, key::Tuple)
+        ops = Operators(1*CompositeIndex(Index(key[2], FID{:f}(key[3], key[1], sign)), [0.0, 0.0], [0.0, 0.0]))
+        new{eltype(ops)}(sign, ops)
     end
-    supermatrix = tile(cluster, vectors, translations)
-    index = convert(Int, size(supermatrix,2)/size(cluster.intrasites,2))
-    supermatrix_block = BlockArray(supermatrix, [size(cluster.intrasites,1)],fill(size(cluster.intrasites,2),index))
-    clusters = Vector{Cluster}()
-    for i in 1:index
-        push!(clusters, Cluster(supermatrix_block[Block(1,i)],i))
+end
+struct SInitialState <: InitialState
+    sign::Int
+    key::Tuple
+    function SInitialState(sign::Int, key::Tuple)
+        new(sign,key)
+        #to be update
     end
-    return clusters
 end
 
 """
-The constant information needed in caculating the CPT green function
+    initialstate(::EDKind{:FED}, sign::Int, key::Tuple) -> FInitialState
+    initialstate(::EDKind{:SED}, sign::Int, key::Tuple) -> SInitialState
+
+Get the Operators needed in calculating the initial vector
 """
-struct CPTinfo
-    cluster::Cluster
-    clusters::Vector{Cluster}
-    terms::Tuple{Vararg{Term}}
-    hoppingterms::Tuple{Vararg{Term}}
-    Hubbardterm::Term
-    hilbert::Hilbert
-    neighbors::Neighbors
-    spin::Rational 
-    norbital::Int 
-    table::Table 
-    bases::BinaryBases
-    ed_Hilbert::ED
-    eigensystem::Eigen
-    Ev::Matrix
-    bases₁::BinaryBases
-    bases₂::BinaryBases
-    ed₁::ED
-    ed₂::ED
-    Hm₁::SparseMatrixCSC
-    Hm₂::SparseMatrixCSC
-    I₁::SparseMatrixCSC
-    I₂::SparseMatrixCSC
-    E₁::SparseMatrixCSC
-    E₂::SparseMatrixCSC
-    unitcellvectors::AbstractVector{<:AbstractVector{<:Number}}
-    BZsteps::Tuple{Int, Vararg{Int}}
-    η::Number 
-end
-function CPTinfo(lattice::AbstractLattice,bases::BinaryBases,terms::Tuple{Vararg{Term}},hoppingterms::Tuple{Vararg{Term}}, Hubbardterm::Term,hilbert::Hilbert,neighbors::Neighbors,supervectors::AbstractVector{<:AbstractVector{<:Number}},unitcellvectors::AbstractVector{<:AbstractVector{<:Number}},BZsteps::Tuple{Int, Vararg{Int}},zeroplus::Number=0.05,steps::Tuple{Int, Vararg{Int}}=(1,1))
-    cluster = Cluster(lattice)
-    clusters = Clusters(cluster,steps,supervectors)
-    spin = Rational((hilbert[1].nspin-1)/2)
-    norbital = hilbert[1].norbital
-    table = Table(hilbert, Metric(EDKind{:FED}(),hilbert))
-    ed_Hilbert = ED(lattice, hilbert, terms, TargetSpace(bases))
-    eigensystem = eigen(matrix(ed_Hilbert); nev=1)
-    Ev = eigensystem.vectors
-    bases₁=BinaryBases(hilbert[1].nspin*norbital*length(lattice),Int(bases.id[1][2]+1))
-    bases₂=BinaryBases(hilbert[1].nspin*norbital*length(lattice),Int(bases.id[1][2]-1))
-    ed₁ = ED(lattice, hilbert, terms, TargetSpace(bases₁))
-    Hm₁ = expand(ed₁.Hₘ).contents[(TargetSpace(bases₁)[1],TargetSpace(bases₁)[1])].matrix
-    ed₂ = ED(lattice, hilbert, terms, TargetSpace(bases₂))
-    Hm₂ = expand(ed₂.Hₘ).contents[(TargetSpace(bases₂)[1],TargetSpace(bases₂)[1])].matrix
-    I₁ = SparseMatrixCSC(spdiagm(0 => ones(length(bases₁))))
-    I₂ = SparseMatrixCSC(spdiagm(0 => ones(length(bases₂))))
-    E₁ = eigensystem.values[1]*I₁
-    E₂ = eigensystem.values[1]*I₂ 
-    η = zeroplus*im
-    return CPTinfo(cluster,clusters,terms,hoppingterms,Hubbardterm,hilbert,neighbors,spin,norbital,table,bases,ed_Hilbert,eigensystem,Ev,bases₁,bases₂,ed₁,ed₂,Hm₁,Hm₂,I₁,I₂,E₁,E₂,unitcellvectors,BZsteps,η)
+function initialstate(::EDKind{:FED}, sign::Int, key::Tuple) FInitialState(sign, key) end
+function initialstate(::EDKind{:SED}, sign::Int, key::Tuple) SInitialState(sign, key) end
+
+"""
+    Kryvals{M<:AbstractMatrix, R<:Real, V<:AbstractVector}
+
+The information obtained with the krylov subspace method that needed in calculating the cluster Green function
+"""
+struct Kryvals{M<:AbstractMatrix, R<:Real, V<:AbstractVector}
+    tridimatrix::M
+    norm::R
+    projectvector::V
+    function Kryvals(matrix::AbstractMatrix, sstate::AbstractVector, m::Int=200)
+        krybasis, tridimatrix = genkrylov(matrix, sstate, m)
+        projectvector = KrylovKit.project!(zeros(Complex, m), krybasis, sstate)
+        norm = √(sstate'*sstate)
+        new{typeof(tridimatrix), typeof(norm), typeof(projectvector)}(tridimatrix, norm, projectvector)
+    end
 end
 
 """
-calculate the Lanczos bases and tridiagonal matrix in krylov subspace
+    genkrylov(matrix::AbstractMatrix, sstate::AbstractVector, m::Int)
+
+Generate a krylov subspace with Lanczos iteration method
 """
-function gen_krylov(Matrix, invec, m)
-    Matrix = Hermitian(Matrix)
+function genkrylov(matrix::AbstractMatrix, sstate::AbstractVector, m::Int)
+    matrix = Hermitian(matrix)
     orth = KrylovKit.ModifiedGramSchmidt()
-    iterator = LanczosIterator(Matrix, invec, orth)
+    iterator = LanczosIterator(matrix, sstate, orth)
     factorization = KrylovKit.initialize(iterator)
     for _ in 1:m-1
         KrylovKit.expand!(iterator, factorization)
@@ -128,258 +90,174 @@ function gen_krylov(Matrix, invec, m)
 end
 
 """
-obtain the inter-cluster bonds between the given cluster and its surrounding clusters 
-"""  
-function interclusterbonds(info::CPTinfo)
-    cluster = info.cluster
-    neighbors = info.neighbors
-    surroundings = filter(x->x!=cluster,info.clusters)
-    for (index₁, val) in enumerate(info.clusters)
-        if val == cluster
-            cluster = val
-        end
+    LehmannGreenFunction{R<:Real, I<:Int, S<:Kryvals} <: GreenFunction
+
+The minimum element of a Green function in Lehmann representation, e.g. <<c_{im↑}|c†_{jn↓}>>. the field sign is used to indicate 
+whether it is the retarded part(sign is 2) or the advanced part(sign is 1) of a Causal Green function.
+"""
+struct LehmannGreenFunction{R<:Real, I<:Int, S<:Kryvals} <: GreenFunction
+    GSEnergy::R
+    sign::I
+    kryvals_l::S
+    kryvals_r::S
+    function LehmannGreenFunction(gse::Real, sign::Int, kryvals_l::Kryvals, kryvals_r::Kryvals)
+        new{typeof(gse), typeof(sign), typeof(kryvals_l)}(gse, sign, kryvals_l, kryvals_r)
     end
-    interclbs_dict =  Dict{Tuple,Bond}() 
-    for (index₂, surrcluster) in enumerate(surroundings)
-        seqs = interlinks(surrcluster, cluster, neighbors)
-        if !isempty(seqs)
-            for q in 1:length(seqs)
-                key = ((cluster.id, seqs[q][2]),(surrcluster.id,seqs[q][3]))#((0,a),(m,b))
-                Point₁ = Point(seqs[q][2],cluster[:,seqs[q][2]],cluster[:,1])
-                Point₂ = Point(seqs[q][3],surrcluster[:,seqs[q][3]],surrcluster[:,1])
-                interclbs_dict[key] = Bond(seqs[q][1], Point₁, Point₂)
-            end
-        end
+end
+function (gf::LehmannGreenFunction)(ω::Real, μ::Real; η::Real=0.05)
+    Im = Matrix{Complex}(I, size(gf.kryvals_l.tridimatrix,2), size(gf.kryvals_l.tridimatrix,2))
+    if gf.sign == 1
+        lgf = dot(gf.kryvals_l.projectvector, inv((ω + η*im + μ - gf.GSEnergy)*Im + Matrix(gf.kryvals_r.tridimatrix))[:, 1])*gf.kryvals_r.norm
+    elseif gf.sign == 2
+        lgf = dot(gf.kryvals_l.projectvector, inv((ω + η*im + μ + gf.GSEnergy)*Im - Matrix(gf.kryvals_r.tridimatrix))[:, 1])*gf.kryvals_r.norm
     end
-    return interclbs_dict
+    return lgf
+end
+
+"""
+    Sysvals{K<:EDKind, R<:Real, S<:Kryvals}
+
+The all information needed to calculate the Green Function of a finite size system 
+"""
+struct Sysvals{K<:EDKind, R<:Real, S<:Kryvals}
+    GSEnergy::R
+    setkryvals₁::Vector{S}
+    setkryvals₂::Vector{S}
+end
+function Sysvals(k::EDKind, eigensystem::Eigen, gen::OperatorGenerator, target::TargetSpace, table::Table; m::Int=200)
+    gse, gs = eigensystem.values[1], eigensystem.vectors[:,1]
+    setkryvals₁, setkryvals₂ = (Vector{Kryvals}(), Vector{Kryvals}())
+    H₁, H₂ = matrix(expand(gen), (target[2], target[2]), table), matrix(expand(gen), (target[3], target[3]), table)
+    orderkeys = sort(collect(keys(table)), by = x -> table[x])
+    for key in orderkeys
+        ops₁, ops₂ = initialstate(k, 1, key).ops, initialstate(k, 2, key).ops
+        sstate₁, sstate₂ = (matrix(ops₁, (target[2], target[1]), table)*gs)[:,1], (matrix(ops₂, (target[3], target[1]), table)*gs)[:,1]
+        push!(setkryvals₁, Kryvals(H₁, sstate₁, m))
+        push!(setkryvals₂, Kryvals(H₂, sstate₂, m))
+    end
+    return Sysvals{typeof(k), typeof(gse), eltype(setkryvals₁)}(gse, setkryvals₁, setkryvals₂)
+end
+
+"""
+    clusterGreenFunction(sys::Sysvals, ω::Real, μ::Real) -> Matrix
+
+Calculate the cluster Green function
+"""
+function clusterGreenFunction(sys::Sysvals, ω::Real, μ::Real)
+    cgfm = zeros(Complex, length(sys.setkryvals₁), length(sys.setkryvals₁))
+    for i in 1:length(sys.setkryvals₁), j in 1:length(sys.setkryvals₁)
+        gf₂ = LehmannGreenFunction(sys.GSEnergy, 2, sys.setkryvals₂[i], sys.setkryvals₂[j])
+        gf₁ = LehmannGreenFunction(sys.GSEnergy, 1, sys.setkryvals₁[j], sys.setkryvals₁[i])
+        cgfm[i, j] += gf₂(ω, μ) + gf₁(ω, μ)
+    end
+    return cgfm
+end
+
+"""
+    differQuadraticTerms(oops::OperatorSum, rops::OperatorSum, table::Table, k::AbstractVector) -> Matrix
+
+Calculate the difference between the Hamiltonian's quadratic terms of the original system and a reference system
+"""
+function differQuadraticTerms(ogen::OperatorGenerator, rgen::OperatorGenerator, table::Table, k::AbstractVector)
+    om, rm = (zeros(Complex, length(table), length(table)), zeros(Complex, length(table), length(table)))
+    oops, rops = filter(op -> length(op) == 2, collect(expand(ogen))), filter(op -> length(op) == 2, collect(expand(rgen)))
+    for oop in oops
+        seq₁, seq₂ = table[oop[1].index'], table[oop[2].index]
+        phase = isapprox(norm(icoordinate(oop)), 0.0) ? one(eltype(om)) : convert(eltype(om), 2*exp(im*dot(k, icoordinate(oop))))
+        om[seq₁, seq₂] += oop.value*phase
+    end
+    for rop in rops 
+        seq₁, seq₂ = table[rop[1].index'], table[rop[2].index]
+        rm[seq₁, seq₂] += rop.value
+    end
+    return om - rm
+end
+
+"""
+    periodization(lattice::AbstractLattice, table::Table, k::AbstractVector) -> Matrix
+
+Carry out the periodization procedure with G-scheme
+"""
+function periodization(lattice::AbstractLattice, table::Table, k::AbstractVector)
+    orderkeys = sort(collect(keys(table)), by = x -> table[x])
+    coordinates = Vector{Vector}()
+    pm = zeros(Complex, length(table), length(table))
+    for key in orderkeys
+        push!(coordinates, lattice.coordinates[:, key[2]])
+    end
+    for i in eachindex(coordinates), j in eachindex(coordinates)
+        pm[i, j] = exp(-im*dot(k, (coordinates[i] - coordinates[j])))
+    end
+    return pm
+end
+
+"""
+    VCA{K<:EDKind, L<:AbstractLattice, T<:Table, G<:OperatorGeneratore, S<:Sysvals}
+
+Variational Cluster Approach(VCA) method for a quantum lattice system.
+"""
+struct VCA{L<:AbstractLattice, T<:Table, G<:OperatorGenerator, S<:Sysvals}
+    lattice::L
+    table::T
+    origigenerator::G
+    refergenerator::G
+    sysvals::S
+end
+
+"""
+    VCA(lattice::AbstractLattice, hilbert::Hilbert, eigensystem::Eigen, origiterms::Tuple{Vararg{Term}}, referterms::Tuple{Vararg{Term}}, target::TargetSpace, neighbors::Neighbors; m::Int=200)
+
+Construct the Variational Cluster Approach(VCA) method for a quantum lattice system.
+"""
+function VCA(lattice::AbstractLattice, hilbert::Hilbert, origiterms::Tuple{Vararg{Term}}, referterms::Tuple{Vararg{Term}}, target::TargetSpace, neighbors::Neighbors; m::Int=200)
+    k = EDKind(typeof(origiterms))
+    table = Table(hilbert, Metric(k, hilbert))
+    origibonds = bonds(lattice, neighbors)
+    referbonds = filter(bond -> isintracell(bond), origibonds)
+    origigenerator = OperatorGenerator(origiterms, origibonds, hilbert) 
+    refergenerator = OperatorGenerator(referterms, referbonds, hilbert)
+    ed = ED(lattice, hilbert, origiterms, TargetSpace(target[1])) 
+    eigensystem = ExactDiagonalization.eigen(matrix(ed); nev=1)
+    sysvals = Sysvals(k, eigensystem, refergenerator, target, table; m)
+    return VCA{typeof(lattice), typeof(table), typeof(origigenerator), typeof(sysvals)}(lattice, table, origigenerator, refergenerator, sysvals)
+end
+
+"""
+Calculate the Causal Green Function with VCA method in k-ω space
+"""
+function VCAGreenFunction(vca::VCA, k::AbstractVector, ω::Real, μ::Real) <: GreenFunction
+    vm = differQuadraticTerms(vca.origigenerator, vca.refergenerator, vca.table, k)
+    Im = Matrix{Complex}(I, size(vm, 1), size(vm, 2))
+    cm = clusterGreenFunction(vca.sysvals, ω, μ)
+    gm = cm*inv(Im - vm*cm)
+    pm = periodization(vca.lattice, vca.table, k)
+    gf = sum((1/length(vca.lattice))*pm*gm)
+    return gf
 end 
 
 """
-calculate the inter-cluster hopping matrix with specific momentum k
+Construct the k-ω matrix to store the data of single particle spectrum
 """
-function interhoppingm(info::CPTinfo, k::SVector)
-    hoppingterms = info.hoppingterms
-    cluster = info.cluster
-    hilbert = info.hilbert
-    interclbs_dict = interclusterbonds(info)
-    spin = info.spin
-    norbital = info.norbital
-    hpv_dict = Dict{Tuple,Number}()
-    getsites(op::Operator)=(Int(op.id[1].index.iid.spin+spin+1), Int(op.id[2].index.iid.spin+spin+1), op.id[1].index.iid.orbital, op.id[2].index.iid.orbital, op.id[1].index.site, op.id[2].index.site)
-    getvalue(op::Operator)=op.value
-    for (key₁, bond) in interclbs_dict
-        for t in 1:length(hoppingterms)
-            ops = expand(hoppingterms[t], bond, hilbert, half=true)
-            for (key₂, op) in ops.contents
-                key₃ = getsites(op)
-                hpv_dict[key₃] = getvalue(op)*exp(im*dot(k, op.id[2].icoordinate))
-            end
-        end
+function singleparticlespectrum(vca, path, range, μ)
+    A = zeros(Float64, length(range), length(path[1]))
+    function calculate_element(m, i)
+        k = path[1][i]
+        ω = range[m]
+        return (-1 / π) * imag(VCAGreenFunction(vca, k, ω, μ))
     end
-    A = zeros(Complex,Int(2*spin)+1,Int(2*spin)+1,norbital,norbital,length(cluster),length(cluster))
-    B = zeros(Complex,(Int(2*spin)+1)*norbital*length(cluster),(Int(2*spin)+1)*norbital*length(cluster))
-    C = BlockArray(B, fill(Int(2*spin)+1, norbital*length(cluster)), fill(Int(2*spin)+1, norbital*length(cluster)))
-    for k in 1:norbital, l in 1:norbital, m in 1:length(cluster), n in 1:length(cluster)
-        for i in 1:Int(2*spin)+1, j in 1:Int(2*spin)+1
-            if (i,j,k,l,m,n) in keys(hpv_dict)
-                A[i,j,k,l,m,n] = hpv_dict[(i,j,k,l,m,n)]
-            else
-                A[i,j,k,l,m,n] = Complex(0.0)
-            end
-            
-        end
-        C[Block((m-1)*norbital+k,(n-1)*norbital+l)]=A[:,:,k,l,m,n]
-    end
-    return Matrix(reshape(C,(Int(2*spin)+1)*norbital*length(cluster), (Int(2*spin)+1)*norbital*length(cluster)))
-end
-
-"""
-calculate the cluster green function of sepcific frequence ω
-"""
-function CGF(info::CPTinfo, ω::Number)
-    Hubbardterm = info.Hubbardterm
-    cluster = info.cluster
-    spin = info.spin
-    norbital = info.norbital
-    table = info.table
-    Ev = info.Ev
-    bases = info.bases
-    bases₁ = info.bases₁
-    bases₂ = info.bases₂
-    eCGF_den = (ω + info.η + Hubbardterm.value/2)*info.I₁ - info.Hm₁ + info.E₁
-    hCGF_den = (ω + info.η + Hubbardterm.value/2)*info.I₂ + info.Hm₂ - info.E₂
-    cgf_dict = Dict{Tuple, Number}()
-    for a in 1:length(cluster), b in  1:length(cluster)
-        for  s1 in -spin:spin, s2 in -spin:spin, n1 in 1:norbital, n2 in 1:norbital
-            key = (Int(s1+spin+1),Int(s2+spin+1),n1,n2,a,b)
-            anniop = 1*CompositeIndex(Index(key[5], FID{:f}(n1, s1, 1)), cluster[:,key[5]], [0.0, 0.0])
-            creatop = 1*CompositeIndex(Index(key[6], FID{:f}(n2, s2, 2)), cluster[:,key[6]], [0.0, 0.0])
-            anniopm_left = matrix(anniop, (bases, bases₁), table)
-            creatopm_right = matrix(creatop, (bases₁, bases), table)
-            anniopm_right = matrix(anniop, (bases₂, bases), table)
-            creatopm_left = matrix(creatop, (bases, bases₂), table)
-            ecgf = dot((conj(transpose(Ev))*anniopm_left),gmres(eCGF_den,(creatopm_right*Ev))) 
-            hcgf = dot((conj(transpose(Ev))*creatopm_left),gmres(hCGF_den,(anniopm_right*Ev)))
-            cgf_dict[key] = ecgf + hcgf
-        end
-    end
-    A = zeros(Complex,Int(2*spin)+1,Int(2*spin)+1,norbital,norbital,length(cluster),length(cluster))
-    B = zeros(Complex,(Int(2*spin)+1)*norbital*length(cluster),(Int(2*spin)+1)*norbital*length(cluster))
-    C = BlockArray(B, fill(Int(2*spin)+1, norbital*length(cluster)), fill(Int(2*spin)+1, norbital*length(cluster)))
-    for k in 1:norbital, l in 1:norbital, m in 1:length(cluster), n in 1:length(cluster)
-        for i in 1:Int(2*spin)+1, j in 1:Int(2*spin)+1
-            if (i,j,k,l,m,n) in keys(cgf_dict)
-                A[i,j,k,l,m,n] = cgf_dict[(i,j,k,l,m,n)]
-            else
-                A[i,j,k,l,m,n] = Complex(0.0)
-            end
-            
-        end
-        C[Block((m-1)*norbital+k,(n-1)*norbital+l)]=A[:,:,k,l,m,n]
-    end
-    return Matrix(reshape(C,(Int(2*spin)+1)*norbital*length(cluster), (Int(2*spin)+1)*norbital*length(cluster))) 
-end
-
-"""
-obtain the cluster green function with Lanczos method 
-"""
-function CGF(info::CPTinfo, ω_range::StepRangeLen)
-    Hubbardterm = info.Hubbardterm
-    cluster = info.cluster
-    spin = info.spin
-    norbital = info.norbital
-    table = info.table
-    Ev = info.Ev
-    bases = info.bases
-    bases₁ = info.bases₁
-    bases₂ = info.bases₂
-    In = Matrix{Complex}(I, 300, 300)
-    ecgf_dict = Dict{Tuple, Vector}()
-    hcgf_dict = Dict{Tuple, Vector}()
-    Threads.@threads for index₁ in 1:length(cluster)
-        for s₁ in -spin:spin, n₁ in 1:norbital
-            Cr⁺ = 1*CompositeIndex(Index(index₁, FID{:f}(n₁, s₁, 2)), cluster[:, index₁], [0.0, 0.0])
-            Cr  = 1*CompositeIndex(Index(index₁, FID{:f}(n₁, s₁, 1)), cluster[:, index₁], [0.0, 0.0])
-            Cr⁺Ω = (matrix(Cr⁺, (bases₁, bases), table)*Ev)[:,1]
-            CrΩ = (matrix(Cr, (bases₂, bases), table)*Ev)[:,1]
-            krylovbasis_e, T_e = gen_krylov(info.Hm₁, Cr⁺Ω, 300)
-            krylovbasis_h, T_h = gen_krylov(info.Hm₂, CrΩ, 300)
-            for index₂ in 1:length(cluster)
-                for s₂ in -spin:spin, n₂ in 1:norbital
-                    key₁ = (Int(s₂+spin+1),Int(s₁+spin+1),n₂,n₁,index₂,index₁)
-                    key₂ = (Int(s₁+spin+1),Int(s₂+spin+1),n₁,n₂,index₁,index₂)
-                    Cl⁺ = 1*CompositeIndex(Index(index₂, FID{:f}(n₂, s₂, 2)), cluster[:, index₂], [0.0, 0.0])
-                    Cl  = 1*CompositeIndex(Index(index₂, FID{:f}(n₂, s₂, 1)), cluster[:, index₂], [0.0, 0.0])
-                    Cl⁺Ω = (matrix(Cl⁺, (bases₁, bases), table)*Ev)[:,1]
-                    ClΩ = (matrix(Cl, (bases₂, bases), table)*Ev)[:,1]
-                    X_e = KrylovKit.project!(zeros(Complex, 300), krylovbasis_e, Cl⁺Ω)
-                    X_h = KrylovKit.project!(zeros(Complex, 300), krylovbasis_h, ClΩ)
-                    egf_vec = Vector()
-                    hgf_vec = Vector()
-                    for ω in ω_range
-                        egf = dot(X_e, inv((ω + info.η + Hubbardterm.value/2 + info.eigensystem.values[1])*In - Matrix(T_e))[:,1])*√(Cr⁺Ω'*Cr⁺Ω)
-                        hgf = dot(X_h, inv((ω + info.η + Hubbardterm.value/2 - info.eigensystem.values[1])*In + Matrix(T_h))[:,1])*√(CrΩ'*CrΩ)
-                        push!(egf_vec, egf)
-                        push!(hgf_vec, hgf)
-                    end
-                    ecgf_dict[key₁] = egf_vec
-                    hcgf_dict[key₂] = hgf_vec
-                end
-            end
-        end
-    end
-    cgf_vec = Vector{Matrix}()
-    for ω in eachindex(ω_range)
-        A = zeros(Complex,Int(2*spin)+1,Int(2*spin)+1,norbital,norbital,length(cluster),length(cluster))
-        B = zeros(Complex,(Int(2*spin)+1)*norbital*length(cluster),(Int(2*spin)+1)*norbital*length(cluster))
-        C = BlockArray(B, fill(Int(2*spin)+1, norbital*length(cluster)), fill(Int(2*spin)+1, norbital*length(cluster)))
-        for k in 1:norbital, l in 1:norbital, m in 1:length(cluster), n in 1:length(cluster)
-            for i in 1:Int(2*spin)+1, j in 1:Int(2*spin)+1
-                if (i,j,k,l,m,n) in keys(ecgf_dict)
-                    A[i,j,k,l,m,n] = ecgf_dict[(i,j,k,l,m,n)][ω] + hcgf_dict[(i,j,k,l,m,n)][ω]
-                else
-                    A[i,j,k,l,m,n] = Complex(0.0)
-                end
-                
-            end
-            C[Block((m-1)*norbital+k,(n-1)*norbital+l)]=A[:,:,k,l,m,n]
-        end
-        push!(cgf_vec, Matrix(reshape(C,(Int(2*spin)+1)*norbital*length(cluster), (Int(2*spin)+1)*norbital*length(cluster)))) 
-    end
-    return cgf_vec
-end
-
-"""
-obtaion the CPT green function with (k, ω)
-"""
-function CPTGF(info::CPTinfo, k::SVector, ω::Number)
-    cluster = info.cluster
-    spin = info.spin
-    norbital = info.norbital
-    V = interhoppingm(info, k)
-    G = CGF(info, ω)
-    In = Matrix{Complex}(I, size(G,1), size(G,2))
-    GFm = G*inv(In-V*G)
-    GFB = BlockArray(GFm, fill((Int(2*spin)+1)*norbital, length(cluster)),fill((Int(2*spin)+1)*norbital, length(cluster)))
-    GF = 0
-    for i in 1:length(cluster), j in 1:length(cluster)
-        GF += sum(GFB[Block(i,j)])*exp(-im*dot(k, (cluster[:,i] -cluster[:,j])))
-    end
-    return (1/length(cluster))*GF
-end
-
-"""
-obtaion the CPT green function with Lanczos Method 
-"""
-function CPTGF(info::CPTinfo, k_path::Tuple, ω_range::StepRangeLen)
-    path = selectpath(BrillouinZone(reciprocals(info.unitcellvectors), info.BZsteps), k_path)
-    G = zeros(Complex, length(ω_range), length(path[1]))
-    cluster = info.cluster
-    spin = info.spin
-    norbital = info.norbital
-    V_vec = Vector{Matrix}()
-    for k in path[1]
-        push!(V_vec, interhoppingm(info, k))
-    end
-    G_vec = CGF(info, ω_range)
-    In = Matrix{Complex}(I, size(G_vec[1],1), size(G_vec[1],2))
-    for i in eachindex(ω_range) , j in eachindex(path[1])
-        k = path[1][j]
-        GFm = G_vec[i]*inv(In-V_vec[j]*G_vec[i])
-        GFB = BlockArray(GFm, fill((Int(2*spin)+1)*norbital, length(cluster)),fill((Int(2*spin)+1)*norbital, length(cluster)))
-        GF = 0
-        for m in 1:length(cluster), n in 1:length(cluster)
-            GF += sum(GFB[Block(m,n)])*exp(-im*dot(k, (cluster[:,m] -cluster[:,n])))
-        end
-        G[i, j] = (1/length(cluster))*GF
-    end
-    return G
-end
-
-
-"""
-obtain the spectral function of CPT green function 
-"""
-@inline function CPTspec(info, k_path, ω_range; lanczos::Bool=false)
-    if lanczos
-        G = CPTGF(info, k_path, ω_range)
-        A = (-1 / π) * imag(G)
-    else
-        path = selectpath(BrillouinZone(reciprocals(info.unitcellvectors), info.BZsteps), k_path)
-        A = zeros(Float64, length(ω_range), length(path[1]))
-        function calculate_element(m, i)
-            k = path[1][i]
-            ω = ω_range[m]
-            return (-1 / π) * imag(CPTGF(info, k, ω))
-        end
-        Threads.@threads for i in eachindex(path[1])
-            for m in eachindex(ω_range)
-                A[m, i] = calculate_element(m, i)
-            end
+    for i in eachindex(path[1])
+        for m in eachindex(range)
+            A[m, i] = calculate_element(m, i)
         end
     end
     return A
 end
+
+
+
+
+
+
 
 
 
