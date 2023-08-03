@@ -10,8 +10,9 @@ test/*.dat
 *.jls
 .DS_Store
 
-.ipynb_checkpoints/
 results/
+.ipynb_checkpoints/
+
 .vscode/
 
 desktop.ini
