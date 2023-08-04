@@ -21,11 +21,20 @@ f = plot(k_path, ω_range, A; xlabel="k", ylabel="ω", color=:jet1, title="Spect
 vca = loadData("squareL4U4_vca.jls")
 k_path = ReciprocalPath(reciprocals(vca.unitcell.vectors), rectangle"Γ-X-M-Γ", length=100)
 ω_range = range(-6, 6, length=400)
-G = singleParticleGreenFunction(vca, k_path::ReciprocalPath,ω_range,Parameters(vca.origigenerator)[:U]/2;timer=vcatimer)
+fq = ω_range .+ (Parameters(vca.origigenerator)[:U]/2 + 0.05*im)
+G = singleParticleGreenFunction(vca, k_path, fq; timer=vcatimer)
 A = spectrum(G)
 f = plot(k_path, ω_range, A; xlabel="k", ylabel="ω", color=:jet1, title="Spectral Function(L=2, U=4, n=1/2)",clims=(0, 3))
 =#
+vcas = loadData("squareL4U4_af.jls")
+rz = ReciprocalZone(reciprocals(vca.cluster.vectors); length=100)
+gps = [GrandPotential(evca, rz, 2.0) for evca in vcas]
+plot(range(-0.3, 0.3, length=50), gps, label="Ω")
+min_val = minimum(gps)
+min_idx = argmin(gps)
+scatter!([range(-0.3, 0.3, length=50)[min_idx]], [min_val], markercolor=:red, markersize=6)
 
+#42.470438 seconds (150.43 M allocations: 83.360 GiB, 10.49% gc time, 1.26% compilation time: 5% of which was recompilation)
 #=
 #square lattice t=-1, U=4 L=(2,2), n=3/4, NN
 vca = loadData("square(2,2)U4_vca.jls")

@@ -1,6 +1,7 @@
 using CPTVCA
 using ExactDiagonalization
 using QuantumLattices
+using LinearAlgebra
 #=
 #define a unitcell and a cluster
 unitcell = Lattice([0, 0]; vectors=[[1, 0]])
@@ -19,21 +20,36 @@ neighbors = Neighbors(0=>0.0, 1=>1.0)
 vca = VCA(unitcell, cluster, hilbert, origiterms, referterms, target; neighbors=neighbors, m=200)
 saveData(vca, "line(1,2)U4_vca.jls")
 =#
-#=
+
 # square lattice, L = (2,2), n = 1/2
 unitcell = Lattice([0, 0]; vectors=[[1, 0],[0, 1]])
 cluster = Lattice(unitcell,(2,2),('p','p'))
 hilbert = Hilbert(site=>Fock{:f}(1, 2) for site=1:length(cluster))
 target = TargetSpace(BinaryBases(8, 4), BinaryBases(8, 3), BinaryBases(8, 5))
-t = Hopping(:t, -1.0, 1)
-U = Hubbard(:U, 4.0)
+t = Hopping(:t, Complex(-1.0), 1)
+U = Hubbard(:U, Complex(4.0))
 origiterms = (t, U)
-t_r = Hopping(:t, -1.0, 1)
-referterms = (t_r, U)
+
+function AFphase₁(bond::Bond)
+    exp(im*dot([π,π],rcoordinate(bond)))
+end
+function AFphase₂(bond::Bond)
+    -exp(im*dot([π,π],rcoordinate(bond)))
+end
+coupling₁ = Coupling(Index(:,FID{:f}(:,1//2,:)),Index(:,FID{:f}(:,1//2,:)))
+coupling₂ = Coupling(Index(:,FID{:f}(:,-1//2,:)),Index(:,FID{:f}(:,-1//2,:)))
+af₁ = Onsite(:af₁, Complex(1.0), coupling₁; amplitude = AFphase₁)
+af₂ = Onsite(:af₂, Complex(1.0), coupling₂; amplitude = AFphase₂)
+
+t_r = Hopping(:t, Complex(-1.0), 1)
+referterms = (t_r, U, af₁, af₂)
 neighbors = Neighbors(0=>0.0, 1=>1.0)
 vca = VCA(unitcell, cluster, hilbert, origiterms, referterms, target; neighbors=neighbors, m=200)
 saveData(vca, "squareL4U4_vca.jls")
-=#
+
+varparams = diag([(af₁ = a , af₂ = b) for a in range(-0.3,0.3,length=50), b in range(-0.3,0.3,length=50)])
+vcas = VCAs(unitcell, cluster, hilbert, origiterms, referterms, target, varparams; neighbors=neighbors, m=200)
+saveData(vcas, "squareL4U4_af.jls")
 #=
 # square lattice, L = (2,2), n = 3/4
 unitcell = Lattice([0, 0]; vectors=[[1, 0],[0, 1]])

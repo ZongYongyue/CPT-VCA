@@ -9,6 +9,7 @@ test/*.dat
 *.pdf
 *.jls
 .DS_Store
+temp.jl
 
 results/
 .ipynb_checkpoints/
