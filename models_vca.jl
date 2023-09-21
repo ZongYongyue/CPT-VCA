@@ -2,7 +2,7 @@ using CPTVCA
 using ExactDiagonalization
 using QuantumLattices
 using LinearAlgebra
-#=
+
 #define a unitcell and a cluster
 unitcell = Lattice([0, 0]; vectors=[[1, 0]])
 cluster = Lattice([0, 0], [1, 0]; vectors = [[2, 0]])
@@ -18,9 +18,9 @@ referterms = (t_r, U)
 neighbors = Neighbors(0=>0.0, 1=>1.0)
 #give the VCA method and save the vca data
 vca = VCA(unitcell, cluster, hilbert, origiterms, referterms, target; neighbors=neighbors, m=200)
-saveData(vca, "line(1,2)U4_vca.jls")
-=#
+#saveData(vca, "line(1,2)U4_vca.jls")
 
+#=
 # square lattice, L = (2,2), n = 1/2
 unitcell = Lattice([0, 0]; vectors=[[1, 0],[0, 1]])
 cluster = Lattice(unitcell,(2,2),('p','p'))
@@ -47,9 +47,10 @@ neighbors = Neighbors(0=>0.0, 1=>1.0)
 vca = VCA(unitcell, cluster, hilbert, origiterms, referterms, target; neighbors=neighbors, m=200)
 saveData(vca, "squareL4U4_vca.jls")
 
-varparams = diag([(af₁ = a , af₂ = b) for a in range(-0.3,0.3,length=50), b in range(-0.3,0.3,length=50)])
+varparams = [(af₁ = a , af₂ = b) for a in range(-0.3,0.3,length=50), b in range(-0.3,0.3,length=50)]
 vcas = VCAs(unitcell, cluster, hilbert, origiterms, referterms, target, varparams; neighbors=neighbors, m=200)
 saveData(vcas, "squareL4U4_af.jls")
+=#
 #=
 # square lattice, L = (2,2), n = 3/4
 unitcell = Lattice([0, 0]; vectors=[[1, 0],[0, 1]])

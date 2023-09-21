@@ -6,6 +6,7 @@ version = "0.1.0"
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 ExactDiagonalization = "52dcaa32-6da7-11e9-20ef-755843cf72eb"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
